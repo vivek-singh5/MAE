@@ -850,7 +850,12 @@ function renderRMultiple(closed){
 
 // ─── EXCURSION CHARTS (MAE, MFE, ETD) ──────────────────
 function renderExcursionCharts(closed){
-  const withData = closed.filter(t => t.MAE || t.MFE || t.ETD);
+  // Update: check for MAE, MFE, or ETD keys and ignore empty strings. 
+  // We use Math.abs(n()) for MAE because the sheet stores it as negative (e.g. -3.4%)
+  const withData = closed.filter(t => (t.MAE && String(t.MAE).trim() !== '') || 
+                                      (t.MFE && String(t.MFE).trim() !== '') || 
+                                      (t.ETD && String(t.ETD).trim() !== ''));
+  
   const ctxScatter = document.getElementById('maemfeChart').getContext('2d');
   const ctxETD = document.getElementById('etdChart').getContext('2d');
   
@@ -858,39 +863,42 @@ function renderExcursionCharts(closed){
   if(charts.etd) charts.etd.destroy();
 
   if(!withData.length){
-    document.getElementById('excursionSummary').innerHTML = '<div style="color:var(--text3);font-size:11px;">No Excursion data (MAE/MFE/ETD) found.</div>';
+    document.getElementById('excursionSummary').innerHTML = '<div style="color:var(--text3);font-size:11px;padding:20px;">No Excursion data found. Ensure column headers match exactly (MAE, MFE, ETD).</div>';
     return;
   }
 
-  // Scatter Chart: MAE vs MFE
+  // Scatter Chart: MAE (as positive drawdown) vs MFE (Peak Profit)
   charts.maemfe = new Chart(ctxScatter, {
     type: 'scatter',
     data: {
       datasets: [
         {
           label: 'Wins',
-          data: withData.filter(t => calcPnL(t) > 0).map(t => ({x: n(t.MAE), y: n(t.MFE)})),
+          data: withData.filter(t => calcPnL(t) > 0).map(t => ({x: Math.abs(n(t.MAE)), y: n(t.MFE)})),
           backgroundColor: 'rgba(16, 185, 129, 0.6)', pointRadius: 5
         },
         {
           label: 'Losses',
-          data: withData.filter(t => calcPnL(t) <= 0).map(t => ({x: n(t.MAE), y: n(t.MFE)})),
+          data: withData.filter(t => calcPnL(t) <= 0).map(t => ({x: Math.abs(n(t.MAE)), y: n(t.MFE)})),
           backgroundColor: 'rgba(244, 63, 94, 0.6)', pointRadius: 5
         }
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#94a3b8', font: { family: 'JetBrains Mono', size: 9 } } } },
+      plugins: { 
+        legend: { labels: { color: '#94a3b8', font: { family: 'JetBrains Mono', size: 9 } } },
+        tooltip: { callbacks: { label: (c) => `MAE: ${c.raw.x}%, MFE: ${c.raw.y}%` } }
+      },
       scales: {
-        x: { title: { display: true, text: 'MAE % (Drawdown)', color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        x: { title: { display: true, text: 'MAE % (Max Drawdown)', color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } },
         y: { title: { display: true, text: 'MFE % (Peak Profit)', color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } }
       }
     }
   });
 
   // ETD Histogram
-  const etdVals = withData.map(t => n(t.ETD)).filter(v => v > 0);
+  const etdVals = withData.map(t => n(t.ETD)).filter(v => v >= 0);
   const etdBins = ['0-2%', '2-5%', '5-10%', '10%+'];
   const etdCounts = [0, 0, 0, 0];
   etdVals.forEach(v => {
@@ -913,11 +921,14 @@ function renderExcursionCharts(closed){
     }
   });
 
-  // Summary Text
-  const avgMAE = withData.reduce((a,t) => a + n(t.MAE), 0) / withData.length;
+  // Summary Text using Abs for MAE
+  const avgMAE = withData.reduce((a,t) => a + Math.abs(n(t.MAE)), 0) / withData.length;
   const avgMFE = withData.reduce((a,t) => a + n(t.MFE), 0) / withData.length;
   const avgETD = withData.reduce((a,t) => a + n(t.ETD), 0) / withData.length;
-  const efficiency = withData.filter(t => n(t.MFE) > 0).reduce((a,t) => a + (calcPctMove(t)/n(t.MFE)), 0) / withData.length * 100;
+  
+  // Efficiency: (Actual Move / MFE)
+  const filteredForEff = withData.filter(t => n(t.MFE) > 0);
+  const efficiency = filteredForEff.length ? (filteredForEff.reduce((a,t) => a + (calcPctMove(t)/n(t.MFE)), 0) / filteredForEff.length * 100) : 0;
 
   document.getElementById('excursionSummary').innerHTML = `
     <div class="bench-row"><span>Avg MAE (Adverse)</span><b class="neg">${avgMAE.toFixed(2)}%</b></div>
