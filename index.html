@@ -225,21 +225,23 @@ select:focus,input:focus{border-color:var(--accent);}
       <div style="height:230px;"><canvas id="rCumChart"></canvas></div>
     </div>
   </div>
-  <div class="card" style="margin-bottom:20px;">
-    <div class="card-title">R BREAKDOWN</div>
-    <div id="rDistBars" style="padding-top:4px;"></div>
-  </div>
-
-  <div class="slabel">📉 Max Adverse Excursion (MAE)</div>
+  
+  <div class="slabel">📉 Trade Excursion Analysis (MAE / MFE / ETD)</div>
   <div class="grid-2">
     <div class="card">
-      <div class="card-title">MAE SCATTER</div>
-      <div style="height:220px;"><canvas id="maeChart"></canvas></div>
+      <div class="card-title">MAE vs MFE SCATTER</div>
+      <div style="height:230px;"><canvas id="maemfeChart"></canvas></div>
     </div>
     <div class="card">
-      <div class="card-title">MAE SUMMARY</div>
-      <div id="maeSummary" style="font-family:var(--mono);font-size:11px;display:flex;flex-direction:column;gap:8px;padding-top:4px;"></div>
+      <div class="card-title">EXCURSION SUMMARY</div>
+      <div id="excursionSummary" style="font-family:var(--mono);font-size:11px;display:flex;flex-direction:column;gap:8px;"></div>
     </div>
+  </div>
+
+  <div class="card" style="margin-bottom:20px;">
+    <div class="card-title">END OF TRADE DRAWDOWN (ETD) DISTRIBUTION</div>
+    <div style="height:200px;"><canvas id="etdChart"></canvas></div>
+    <div style="margin-top:12px; font-size:10px; color:var(--text3); font-family:var(--mono);">ETD measures % gain given back from peak before exit. Low ETD = Tight Exits.</div>
   </div>
 
   <div class="slabel">🔬 Strategy Deep Dive</div>
@@ -542,20 +544,21 @@ function populateFilters(){
 
 // ─── MAIN RENDER ───────────────────────────────────────
 function renderAll(){
+  const closed = getClosed();
   updatePortfolioKPIs();
   renderOpenPositions();
   renderPerformanceKPIs();
-  renderStreak(getClosed());
-  renderEquity(getClosed());
-  renderHOF(getClosed());
+  renderStreak(closed);
+  renderEquity(closed);
+  renderHOF(closed);
   renderInsightTable();
-  renderRMultiple(getClosed());
-  renderMAE(getClosed());
-  renderSetupCharts(getClosed());
-  renderBenchmark(getClosed());
+  renderRMultiple(closed);
+  renderExcursionCharts(closed);
+  renderSetupCharts(closed);
+  renderBenchmark(closed);
   renderCalendar();
   renderHistory();
-  renderStreakAlert(getClosed());
+  renderStreakAlert(closed);
 }
 
 // ─── PORTFOLIO KPIs ────────────────────────────────────
@@ -845,46 +848,83 @@ function renderRMultiple(closed){
   }).join('');
 }
 
-// ─── MAE ───────────────────────────────────────────────
-function renderMAE(closed){
-  const withMAE = closed.filter(t => t.MAE && String(t.MAE).trim() !== '');
-  const ctx = document.getElementById('maeChart').getContext('2d');
-  if(charts.mae) charts.mae.destroy();
+// ─── EXCURSION CHARTS (MAE, MFE, ETD) ──────────────────
+function renderExcursionCharts(closed){
+  const withData = closed.filter(t => t.MAE || t.MFE || t.ETD);
+  const ctxScatter = document.getElementById('maemfeChart').getContext('2d');
+  const ctxETD = document.getElementById('etdChart').getContext('2d');
   
-  if(!withMAE.length){
-    document.getElementById('maeSummary').innerHTML =
-      '<div style="color:var(--text3);font-size:11px;line-height:1.8;padding:10px;">Check if your CSV column is named <b>MAE</b>.<br><br>Currently 0 trades with MAE values detected.</div>';
-    charts.mae = new Chart(ctx,{type:'scatter',data:{datasets:[]},options:{responsive:true,maintainAspectRatio:false}});
+  if(charts.maemfe) charts.maemfe.destroy();
+  if(charts.etd) charts.etd.destroy();
+
+  if(!withData.length){
+    document.getElementById('excursionSummary').innerHTML = '<div style="color:var(--text3);font-size:11px;">No Excursion data (MAE/MFE/ETD) found.</div>';
     return;
   }
 
-  const ws = withMAE.filter(t => calcPnL(t) > 0);
-  const ls = withMAE.filter(t => calcPnL(t) <= 0);
-  
-  charts.mae = new Chart(ctx,{
-    type:'scatter',
-    data:{datasets:[
-      {label:'Wins',data:ws.map(t=>({x:n(t.MAE),y:calcPctMove(t)})),backgroundColor:'rgba(16, 185, 129, 0.6)',pointRadius:5},
-      {label:'Losses',data:ls.map(t=>({x:n(t.MAE),y:calcPctMove(t)})),backgroundColor:'rgba(244, 63, 94, 0.6)',pointRadius:5},
-    ]},
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{labels:{font:{family:'JetBrains Mono',size:9},color:'#94a3b8',boxWidth:10}}},
-      scales:{
-        x:{title:{display:true,text:'MAE % (Drawdown)',font:{family:'JetBrains Mono',size:9},color:'#64748b'},grid:{color:'rgba(255,255,255,0.04)'},ticks:{callback:v=>v+'%'}},
-        y:{title:{display:true,text:'Final P&L %',font:{family:'JetBrains Mono',size:9},color:'#64748b'},grid:{color:'rgba(255,255,255,0.04)'},ticks:{callback:v=>v+'%'}}
+  // Scatter Chart: MAE vs MFE
+  charts.maemfe = new Chart(ctxScatter, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'Wins',
+          data: withData.filter(t => calcPnL(t) > 0).map(t => ({x: n(t.MAE), y: n(t.MFE)})),
+          backgroundColor: 'rgba(16, 185, 129, 0.6)', pointRadius: 5
+        },
+        {
+          label: 'Losses',
+          data: withData.filter(t => calcPnL(t) <= 0).map(t => ({x: n(t.MAE), y: n(t.MFE)})),
+          backgroundColor: 'rgba(244, 63, 94, 0.6)', pointRadius: 5
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#94a3b8', font: { family: 'JetBrains Mono', size: 9 } } } },
+      scales: {
+        x: { title: { display: true, text: 'MAE % (Drawdown)', color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { title: { display: true, text: 'MFE % (Peak Profit)', color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } }
       }
     }
   });
 
-  const aw = ws.length ? (ws.reduce((a,t)=>a+n(t.MAE),0)/ws.length) : 0;
-  const al = ls.length ? (ls.reduce((a,t)=>a+n(t.MAE),0)/ls.length) : 0;
-  
-  document.getElementById('maeSummary').innerHTML=`
-    <div class="bench-row"><span>Trades with MAE data</span><b>${withMAE.length}</b></div>
-    <div class="bench-row"><span>Avg MAE on Winners</span><b class="neg">${aw.toFixed(2)}%</b></div>
-    <div class="bench-row"><span>Avg MAE on Losers</span><b class="neg">${al.toFixed(2)}%</b></div>
-    <div style="margin-top:10px; font-size:10px; color:var(--text3); font-style:italic;">Note: MAE shows how much price went against you before exit. Smaller MAE on winners = better entries.</div>`;
+  // ETD Histogram
+  const etdVals = withData.map(t => n(t.ETD)).filter(v => v > 0);
+  const etdBins = ['0-2%', '2-5%', '5-10%', '10%+'];
+  const etdCounts = [0, 0, 0, 0];
+  etdVals.forEach(v => {
+    if(v <= 2) etdCounts[0]++; else if(v <= 5) etdCounts[1]++; else if(v <= 10) etdCounts[2]++; else etdCounts[3]++;
+  });
+
+  charts.etd = new Chart(ctxETD, {
+    type: 'bar',
+    data: {
+      labels: etdBins,
+      datasets: [{ data: etdCounts, backgroundColor: 'rgba(59, 130, 246, 0.6)', borderRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#64748b' } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#64748b', stepSize: 1 } }
+      }
+    }
+  });
+
+  // Summary Text
+  const avgMAE = withData.reduce((a,t) => a + n(t.MAE), 0) / withData.length;
+  const avgMFE = withData.reduce((a,t) => a + n(t.MFE), 0) / withData.length;
+  const avgETD = withData.reduce((a,t) => a + n(t.ETD), 0) / withData.length;
+  const efficiency = withData.filter(t => n(t.MFE) > 0).reduce((a,t) => a + (calcPctMove(t)/n(t.MFE)), 0) / withData.length * 100;
+
+  document.getElementById('excursionSummary').innerHTML = `
+    <div class="bench-row"><span>Avg MAE (Adverse)</span><b class="neg">${avgMAE.toFixed(2)}%</b></div>
+    <div class="bench-row"><span>Avg MFE (Favorable)</span><b class="pos">${avgMFE.toFixed(2)}%</b></div>
+    <div class="bench-row"><span>Avg ETD (Give-back)</span><b class="neu">${avgETD.toFixed(2)}%</b></div>
+    <div class="bench-row"><span>Exit Efficiency</span><b style="color:var(--accent)">${efficiency.toFixed(1)}%</b></div>
+  `;
 }
 
 // ─── SETUP CHARTS ──────────────────────────────────────
